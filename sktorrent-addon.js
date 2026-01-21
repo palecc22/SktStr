@@ -5,156 +5,133 @@ const bencode = require("bncode");
 const crypto = require("crypto");
 
 // --- KONFIGURÁCIA ---
-const SKT_UID = process.env.SKT_UID || "";
-const SKT_PASS = process.env.SKT_PASS || ""; 
+const SKT_UID = process.env.SKT_UID || "TVOJE_UID";
+const SKT_PASS = process.env.SKT_PASS || "TVOJ_PASS_HASH"; // Musí byť hash z cookies!
 const BASE_URL = "https://sktorrent.eu";
-const SEARCH_URL = `${BASE_URL}/torrent/torrents_v2.php`;
 
-const builder = new addonBuilder({
-    id: "org.stremio.sktorrent",
-    version: "1.2.1",
-    name: "SKTorrent",
-    description: "Slovenské a české streamy priamo z SKTorrent.eu",
+const manifest = {
+    id: "org.sktorrent.stable",
+    version: "2.0.0",
+    name: "SKTorrent Stable",
+    description: "Spoľahlivý scraper pre SKTorrent.eu",
     types: ["movie", "series"],
     resources: ["stream"],
-    catalogs: [], // TOTO TU CHÝBALO A SPÔSOBOVALO CHYBU
+    catalogs: [], // Povinné pre úspešný štart
     idPrefixes: ["tt"]
-});
+};
+
+const builder = new addonBuilder(manifest);
 
 // --- POMOCNÉ FUNKCIE ---
-function removeDiacritics(str) {
-    return str ? str.normalize("NFD").replace(/[\u0300-\u036f]/g, "") : "";
-}
 
-function cleanQuery(str) {
-    // Odstráni dvojbodky a prebytočné medzery, ktoré tracker nemá rád
-    return str.replace(/[:]/g, "").replace(/\s+/g, " ").trim();
-}
+// Čistí názvy od diakritiky pre lepšiu kompatibilitu
+const slugify = (text) => text ? text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim() : "";
 
+// Získanie metaúdajov zo Stremio (názov filmu)
 async function getMeta(type, imdbId) {
     try {
-        const res = await axios.get(`https://v3-cinemeta.strem.io/meta/${type}/${imdbId}.json`, { timeout: 5000 });
+        const res = await axios.get(`https://v3-cinemeta.strem.io/meta/${type}/${imdbId}.json`);
         return res.data && res.data.meta ? res.data.meta : null;
-    } catch (e) { 
-        console.error("[ERROR] Meta zlyhalo:", e.message);
-        return null; 
-    }
+    } catch (e) { return null; }
 }
 
-async function searchTorrents(query) {
-    const q = cleanQuery(query);
-    console.log(`[INFO] 🔎 Hľadám na SKTorrent: '${q}'`);
+// Samotné vyhľadávanie na trackeri
+async function fetchTorrents(query) {
+    console.log(`[INFO] 🔎 Vyhľadávam: "${query}"`);
     try {
-        const res = await axios.get(SEARCH_URL, {
-            params: { search: q, category: 0 },
+        const res = await axios.get(`${BASE_URL}/torrent/torrents_v2.php`, {
+            params: { search: query, category: 0 },
             headers: { 
                 Cookie: `uid=${SKT_UID.trim()}; pass=${SKT_PASS.trim()};`,
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0'
             },
             timeout: 10000
         });
 
-        if (res.data.includes('name="login"') || res.data.includes('Prihlásenie')) {
-            console.error("[ERROR] 🔐 Prihlásenie zlyhalo! Skontroluj UID a PASS v .env");
+        if (res.data.includes('name="login"')) {
+            console.error("[ERROR] 🔐 Neplatné prihlásenie (UID/PASS)!");
             return [];
         }
 
         const $ = cheerio.load(res.data);
         const results = [];
 
+        // Parsovanie tabuľky torrentov
         $('a[href^="details.php?id="]').each((i, el) => {
             const row = $(el).closest("tr");
-            const href = $(el).attr("href");
-            const id = href.split("id=").pop();
+            const detailUrl = $(el).attr("href");
+            const torrentId = detailUrl.split("id=").pop();
             const name = $(el).attr("title") || $(el).text().trim();
-            
-            if (!name || results.find(r => r.id === id)) return;
 
-            // Vyťahovanie veľkosti a seedov z tabuľky
-            const size = row.find("td").filter((i, td) => /GB|MB/.test($(td).text())).first().text().trim() || "?";
+            if (!name || results.find(r => r.id === torrentId)) return;
+
+            // Získanie veľkosti a seedov z buniek tabuľky
+            const size = row.find("td").filter((_, td) => /GB|MB/.test($(td).text())).first().text().trim() || "?";
             const seeds = row.find("td").last().prev().text().trim() || "0";
 
-            results.push({ 
-                name, 
-                id, 
-                size, 
-                seeds, 
-                url: `${BASE_URL}/torrent/download.php?id=${id}` 
+            results.push({
+                name,
+                id: torrentId,
+                size,
+                seeds,
+                downloadUrl: `${BASE_URL}/torrent/download.php?id=${torrentId}`
             });
         });
 
         return results;
-    } catch (err) { 
-        console.error("[ERROR] Search request zlyhal:", err.message);
-        return []; 
-    }
+    } catch (err) { return []; }
 }
 
-async function getHash(url) {
+// Stiahnutie torrentu a extrakcia InfoHashu
+async function extractHash(url) {
     try {
         const res = await axios.get(url, {
             responseType: "arraybuffer",
-            headers: { 
-                Cookie: `uid=${SKT_UID.trim()}; pass=${SKT_PASS.trim()};`,
-                'User-Agent': 'Mozilla/5.0'
-            },
-            timeout: 8000
+            headers: { Cookie: `uid=${SKT_UID.trim()}; pass=${SKT_PASS.trim()};` },
+            timeout: 7000
         });
 
         if (res.data.slice(0, 100).toString().includes("<html")) return null;
 
-        const torrent = bencode.decode(res.data);
-        const info = bencode.encode(torrent.info);
-        return crypto.createHash("sha1").update(info).digest("hex");
-    } catch (e) { 
-        return null; 
-    }
+        const decoded = bencode.decode(res.data);
+        return crypto.createHash("sha1").update(bencode.encode(decoded.info)).digest("hex");
+    } catch (e) { return null; }
 }
 
-// --- STREAM HANDLER ---
+// --- HANDLER PRE STREAMY ---
+
 builder.defineStreamHandler(async ({ type, id }) => {
     const [imdbId, season, episode] = id.split(":");
-    console.log(`[RAW] Požiadavka: ${type} ${id}`);
-
     const meta = await getMeta(type, imdbId);
+    
     if (!meta) return { streams: [] };
 
-    const queries = new Set();
-    // Pridáme originálny názov
-    queries.add(meta.name);
-    // Pridáme verziu bez diakritiky (často pomáha na SK trackeroch)
-    const cleanName = removeDiacritics(meta.name);
-    if (cleanName !== meta.name) queries.add(cleanName);
-
-    let allResults = [];
-    for (let q of queries) {
-        let searchQuery = q;
-        if (type === "series" && season && episode) {
-            searchQuery += ` S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`;
-        }
-        
-        const found = await searchTorrents(searchQuery);
-        allResults = [...allResults, ...found];
-        
-        // Ak sme už niečo našli, nepokračujeme v ďalších pokusoch (šetrí čas)
-        if (allResults.length >= 3) break;
+    let searchQuery = meta.name;
+    
+    // Pridanie SxxExx pre seriály
+    if (type === "series" && season && episode) {
+        searchQuery += ` S${season.padStart(2, '0')}E${episode.padStart(2, '0')}`;
     }
 
-    const streams = await Promise.all(allResults.map(async (t) => {
-        const infoHash = await getHash(t.url);
+    const foundTorrents = await fetchTorrents(searchQuery);
+
+    const streams = await Promise.all(foundTorrents.map(async (t) => {
+        const infoHash = await extractHash(t.downloadUrl);
         if (!infoHash) return null;
+
         return {
-            title: `${t.name}\n👥 ${t.seeds} | 💾 ${t.size}`,
+            title: `${t.name}\n👥 Seeds: ${t.seeds} | 💾 Size: ${t.size}`,
             infoHash: infoHash,
             name: "SKTorrent"
         };
     }));
 
     const finalStreams = streams.filter(Boolean);
-    console.log(`[INFO] ✅ Odosielam ${finalStreams.length} streamov`);
+    console.log(`[OK] Odosielam ${finalStreams.length} streamov.`);
     return { streams: finalStreams };
 });
 
+// --- ŠTART SERVERA ---
 const port = process.env.PORT || 7000;
 serveHTTP(builder.getInterface(), { port });
-console.log(`🚀 SKTorrent addon beží na porte ${port}`);
+console.log(`🚀 Addon beží na porte ${port}`);
