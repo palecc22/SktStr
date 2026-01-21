@@ -113,9 +113,18 @@ async function getInfoHashFromTorrent(url) {
             responseType: "arraybuffer",
             headers: {
                 Cookie: `uid=${SKT_UID}; pass=${SKT_PASS}`,
-                Referer: BASE_URL
+                Referer: BASE_URL,
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
             }
         });
+
+        // DEBUG: Skontrolujte začiatok súboru
+        const firstChars = res.data.slice(0, 50).toString();
+        if (firstChars.includes("<html") || firstChars.includes("<!DOCTYPE")) {
+            console.error("[ERROR] Namiesto torrentu prišlo HTML! Pravdepodobne zlé SKT_UID alebo SKT_PASS.");
+            return null;
+        }
+
         const torrent = bencode.decode(res.data);
         const info = bencode.encode(torrent.info);
         const infoHash = crypto.createHash("sha1").update(info).digest("hex");
@@ -209,3 +218,4 @@ builder.defineCatalogHandler(({ type, id }) => {
 console.log("\ud83d\udccc Manifest debug výpis:", builder.getInterface().manifest);
 serveHTTP(builder.getInterface(), { port: 7000 });
 console.log("\ud83d\ude80 SKTorrent addon beží na http://localhost:7000/manifest.json");
+
