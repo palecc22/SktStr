@@ -112,29 +112,30 @@ async function getInfoHashFromTorrent(url) {
         const res = await axios.get(url, {
             responseType: "arraybuffer",
             headers: {
-                // Skúste tento formát Cookie reťazca
-                'Cookie': `uid=${SKT_UID}; pass=${SKT_PASS};`,
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-                'Accept': 'application/x-bittorrent, */*',
+                // Skús pridať bodkočiarku na koniec a uisti sa, že v premenných nie sú medzery
+                'Cookie': `uid=${SKT_UID.trim()}; pass=${SKT_PASS.trim()};`,
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
                 'Referer': 'https://sktorrent.eu/torrent/torrents_v2.php',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive'
+                'Upgrade-Insecure-Requests': '1'
             },
             maxRedirects: 5
         });
 
-        // Kontrola, či to nie je HTML
-        const firstChars = Buffer.from(res.data).slice(0, 100).toString();
-        if (firstChars.includes("<html") || firstChars.includes("<!DOCTYPE")) {
-             console.error(`[ERROR] Server vrátil HTML namiesto torrentu pre ID: ${url}`);
-             return null;
+        // Kontrola, či neprišlo HTML
+        const dataStart = res.data.slice(0, 100).toString();
+        if (dataStart.includes("<html") || dataStart.includes("<!DOCTYPE")) {
+            // TU JE KRITICKÝ BOD: Vypíšeme titulok stránky, aby sme vedeli, čo sa stalo
+            const title = dataStart.match(/<title>(.*?)<\/title>/i)?.[1] || "neznáme HTML";
+            console.error(`[ERROR] Server namiesto súboru vrátil webstránku: "${title}"`);
+            return null;
         }
 
         const torrent = bencode.decode(res.data);
         const info = bencode.encode(torrent.info);
         return crypto.createHash("sha1").update(info).digest("hex");
     } catch (err) {
-        console.error("[ERROR] ⛔️ Stiahnutie zlyhalo:", err.message);
+        console.error("[ERROR] Chyba pri sťahovaní:", err.message);
         return null;
     }
 }
@@ -222,5 +223,6 @@ builder.defineCatalogHandler(({ type, id }) => {
 console.log("\ud83d\udccc Manifest debug výpis:", builder.getInterface().manifest);
 serveHTTP(builder.getInterface(), { port: 7000 });
 console.log("\ud83d\ude80 SKTorrent addon beží na http://localhost:7000/manifest.json");
+
 
 
