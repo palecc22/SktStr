@@ -71,34 +71,42 @@ async function getTitleFromIMDb(imdbId) {
 async function searchTorrents(query) {
     console.log(`[INFO] 🔎 Hľadám '${query}' na SKTorrent...`);
     try {
-        const session = axios.create({ headers: { Cookie: `uid=${SKT_UID}; pass=${SKT_PASS}` } });
+        const session = axios.create({ 
+            headers: { 
+                Cookie: `uid=${SKT_UID}; pass=${SKT_PASS}`,
+                'User-Agent': 'Mozilla/5.0'
+            } 
+        });
         const res = await session.get(SEARCH_URL, { params: { search: query, category: 0 } });
         const $ = cheerio.load(res.data);
-        const posters = $('a[href^="details.php"] img');
         const results = [];
 
-        posters.each((i, img) => {
-            const parent = $(img).closest("a");
-            const outerTd = parent.closest("td");
-            const fullBlock = outerTd.text().replace(/\s+/g, ' ').trim();
-            const href = parent.attr("href") || "";
-            const tooltip = parent.attr("title") || "";
-            const torrentId = href.split("id=").pop();
-            const category = outerTd.find("b").first().text().trim();
-            const sizeMatch = fullBlock.match(/Velkost\s([^|]+)/i);
-            const seedMatch = fullBlock.match(/Odosielaju\s*:\s*(\d+)/i);
-            const size = sizeMatch ? sizeMatch[1].trim() : "?";
-            const seeds = seedMatch ? seedMatch[1] : "0";
-            if (!category.toLowerCase().includes("film") && !category.toLowerCase().includes("seri")) return;
-            results.push({
-                name: tooltip,
-                id: torrentId,
-                size,
-                seeds,
-                category,
-                downloadUrl: `${BASE_URL}/torrent/download.php?id=${torrentId}`
-            });
+        // Hľadáme všetky riadky v tabuľke, ktoré obsahujú torrent
+        $('a[href^="download.php?id="]').each((i, el) => {
+            const downloadHref = $(el).attr("href"); // napr. download.php?id=12345
+            const torrentId = downloadHref.split("id=").pop();
+            
+            // Hľadáme názov v najbližšom okolí (zvyčajne v title atribúte alebo v predošlom <a>)
+            const parentTd = $(el).closest("td");
+            const titleElement = parentTd.parent().find('a[href^="details.php"]').first();
+            const title = titleElement.attr("title") || titleElement.text().trim();
+            
+            // Veľkosť a seedy (toto budeš musieť doladiť podľa presnej štruktúry tabuľky)
+            const row = $(el).closest("tr");
+            const size = row.find('td').filter((i, td) => $(td).text().includes('MB') || $(td).text().includes('GB')).text().trim() || "?";
+
+            if (title && torrentId) {
+                results.push({
+                    name: title,
+                    id: torrentId,
+                    size: size,
+                    seeds: "0", // Doplniť ak vieš vyparsovať
+                    category: "Film/Seriál",
+                    downloadUrl: `${BASE_URL}/torrent/${downloadHref}`
+                });
+            }
         });
+
         console.log(`[INFO] 📦 Nájdených torrentov: ${results.length}`);
         return results;
     } catch (err) {
@@ -223,6 +231,7 @@ builder.defineCatalogHandler(({ type, id }) => {
 console.log("\ud83d\udccc Manifest debug výpis:", builder.getInterface().manifest);
 serveHTTP(builder.getInterface(), { port: 7000 });
 console.log("\ud83d\ude80 SKTorrent addon beží na http://localhost:7000/manifest.json");
+
 
 
 
