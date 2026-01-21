@@ -73,39 +73,51 @@ async function searchTorrents(query) {
     try {
         const session = axios.create({ 
             headers: { 
-                Cookie: `uid=${SKT_UID}; pass=${SKT_PASS}`,
-                'User-Agent': 'Mozilla/5.0'
+                Cookie: `uid=${SKT_UID.trim()}; pass=${SKT_PASS.trim()};`,
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'
             } 
         });
+        
         const res = await session.get(SEARCH_URL, { params: { search: query, category: 0 } });
         const $ = cheerio.load(res.data);
         const results = [];
 
-        // Hľadáme všetky riadky v tabuľke, ktoré obsahujú torrent
-        $('a[href^="download.php?id="]').each((i, el) => {
-            const downloadHref = $(el).attr("href"); // napr. download.php?id=12345
-            const torrentId = downloadHref.split("id=").pop();
+        // Hľadáme všetky odkazy na detaily (funguje pre zoznam aj postery)
+        $('a[href^="details.php?id="]').each((i, el) => {
+            const href = $(el).attr("href");
+            const torrentId = href.split("id=").pop();
             
-            // Hľadáme názov v najbližšom okolí (zvyčajne v title atribúte alebo v predošlom <a>)
-            const parentTd = $(el).closest("td");
-            const titleElement = parentTd.parent().find('a[href^="details.php"]').first();
-            const title = titleElement.attr("title") || titleElement.text().trim();
+            // Získame názov - buď z title atribútu alebo textu odkazu
+            let name = $(el).attr("title") || $(el).text().trim();
             
-            // Veľkosť a seedy (toto budeš musieť doladiť podľa presnej štruktúry tabuľky)
-            const row = $(el).closest("tr");
-            const size = row.find('td').filter((i, td) => $(td).text().includes('MB') || $(td).text().includes('GB')).text().trim() || "?";
+            // Ak je meno prázdne (napr. pri obrázkoch), skúsime vziať alt z img vnútri
+            if (!name) name = $(el).find('img').attr('alt');
+            
+            if (!name || name.length < 2) return;
 
-            if (title && torrentId) {
-                results.push({
-                    name: title,
-                    id: torrentId,
-                    size: size,
-                    seeds: "0", // Doplniť ak vieš vyparsovať
-                    category: "Film/Seriál",
-                    downloadUrl: `${BASE_URL}/torrent/${downloadHref}`
-                });
-            }
+            // Filtrujeme duplicity (jeden torrent môže mať v riadku viac odkazov)
+            if (results.find(r => r.id === torrentId)) return;
+
+            // Nájdeme veľkosť (často v rovnakom riadku <tr>)
+            const row = $(el).closest("tr");
+            const size = row.find("td").filter((i, td) => $(td).text().includes("GB") || $(td).text().includes("MB")).first().text().trim() || "?";
+            const seeds = row.find("td").last().prev().text().trim() || "0";
+
+            results.push({
+                name: name,
+                id: torrentId,
+                size: size,
+                seeds: seeds,
+                category: "Torrent",
+                downloadUrl: `${BASE_URL}/torrent/download.php?id=${torrentId}`
+            });
         });
+
+        // Debug: Ak nič nenašlo, vypíšeme kúsok HTML pre kontrolu prihlásenia
+        if (results.length === 0) {
+            const isLoginPresent = res.data.includes('name="login"') || res.data.includes('Prihlásenie');
+            if (isLoginPresent) console.error("[ERROR] 🔐 SKTorrent vás neprihlásil. Skontrolujte UID a PASS!");
+        }
 
         console.log(`[INFO] 📦 Nájdených torrentov: ${results.length}`);
         return results;
@@ -231,6 +243,7 @@ builder.defineCatalogHandler(({ type, id }) => {
 console.log("\ud83d\udccc Manifest debug výpis:", builder.getInterface().manifest);
 serveHTTP(builder.getInterface(), { port: 7000 });
 console.log("\ud83d\ude80 SKTorrent addon beží na http://localhost:7000/manifest.json");
+
 
 
 
