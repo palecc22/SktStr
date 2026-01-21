@@ -45,25 +45,25 @@ function isMultiSeason(title) {
     return /(S\d{2}E\d{2}-\d{2}|Complete|All Episodes|Season \d+(-\d+)?)/i.test(title);
 }
 
-async function getTitleFromIMDb(imdbId) {
+async function getTitleFromIMDb(imdbId, type) {
     try {
-        const res = await axios.get(`https://www.imdb.com/title/${imdbId}/`, {
-            headers: { "User-Agent": "Mozilla/5.0" }
-        });
-        const $ = cheerio.load(res.data);
-        const titleRaw = $('title').text().split(' - ')[0].trim();
-        const title = decode(titleRaw);
-        const ldJson = $('script[type="application/ld+json"]').html();
-        let originalTitle = title;
-        if (ldJson) {
-            const json = JSON.parse(ldJson);
-            if (json && json.name) originalTitle = decode(json.name.trim());
+        // Stremio používa Cinémeta ako hlavný zdroj dát
+        const res = await axios.get(`https://v3-cinemeta.strem.io/meta/${type}/${imdbId}.json`);
+        
+        if (!res.data || !res.data.meta) {
+            throw new Error("Meta údaje neboli nájdené");
         }
-        console.log(`[DEBUG] 🌝 Lokalizovaný názov: ${title}`);
-        console.log(`[DEBUG] 🇳️ Originálny názov: ${originalTitle}`);
+
+        const meta = res.data.meta;
+        const title = meta.name; // Lokalizovaný názov (ak je dostupný)
+        
+        // Niektoré filmy majú v meta dátach aj pôvodný názov
+        const originalTitle = meta.name; 
+
+        console.log(`[DEBUG] 🌝 Názov z Cinémeta: ${title}`);
         return { title, originalTitle };
     } catch (err) {
-        console.error("[ERROR] IMDb scraping zlyhal:", err.message);
+        console.error("[ERROR] Cinémeta API zlyhalo:", err.message);
         return null;
     }
 }
@@ -231,6 +231,7 @@ builder.defineCatalogHandler(({ type, id }) => {
 console.log("\ud83d\udccc Manifest debug výpis:", builder.getInterface().manifest);
 serveHTTP(builder.getInterface(), { port: 7000 });
 console.log("\ud83d\ude80 SKTorrent addon beží na http://localhost:7000/manifest.json");
+
 
 
 
