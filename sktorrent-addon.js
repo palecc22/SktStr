@@ -183,7 +183,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
     console.log(`====== 🎮 STREAM Požiadavka pre typ='${type}' imdbId='${imdbId}' season='${season}' episode='${episode}' ======`);
 
-    const titles = await getTitleFromIMDb(imdbId);
+    const titles = await getTitleFromIMDb(imdbId, type);
     if (!titles) return { streams: [] };
 
     const { title, originalTitle } = titles;
@@ -231,6 +231,7 @@ builder.defineCatalogHandler(({ type, id }) => {
 console.log("\ud83d\udccc Manifest debug výpis:", builder.getInterface().manifest);
 serveHTTP(builder.getInterface(), { port: 7000 });
 console.log("\ud83d\ude80 SKTorrent addon beží na http://localhost:7000/manifest.json");
+
 
 
 
